@@ -8,23 +8,30 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type Dispatcher struct {
+	sync.Mutex
+	players  map[*websocket.Conn]*PlayerSession
+	handlers map[string]func(*websocket.Conn, json.RawMessage)
+}
+
 type PlayerSession struct {
 	Conn *websocket.Conn
 	Name string
 }
 
-type Dispatcher struct {
-	sync.Mutex
-	players map[*websocket.Conn]*PlayerSession
-}
-
 func NewDispatcher() *Dispatcher {
-	return &Dispatcher {
-		players: make(map[*websocket.Conn]*PlayerSession),
+	d := &Dispatcher{
+		players:  make(map[*websocket.Conn]*PlayerSession),
+		handlers: make(map[string]func(*websocket.Conn, json.RawMessage)),
 	}
+
+	d.handlers["join"] = d.handleJoin
+	d.handlers["leave"] = d.handleLeave
+
+	return d
 }
 
-func (d* Dispatcher) HandleConnection(conn* websocket.Conn) {
+func (d *Dispatcher) HandleConnection(conn *websocket.Conn) {
 	defer conn.Close()
 	d.Lock()
 	d.players[conn] = &PlayerSession{Conn: conn}
@@ -33,53 +40,50 @@ func (d* Dispatcher) HandleConnection(conn* websocket.Conn) {
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("Disconnected: %v\n", err)
-			d.handleLeave(conn)
+			log.Printf("Disconnected: %v\n", err)
+			d.handleLeave(conn, nil)
+			return
 		}
 
 		var m struct {
-			Type string	`json:"type"`
+			Type string          `json:"type"`
 			Data json.RawMessage `json:"data"`
 		}
-
 		if err := json.Unmarshal(msg, &m); err != nil {
-			log.Printf("Bad message: ", err)
+			log.Println("Bad message:", err)
 			continue
 		}
 
-		switch m.Type {
-		case "join":
-			var data struct {
-				Name string `json:"name"`
-			}
-			if err := json.Unmarshal(m.Data, &data); err == nil {
-				d.handleJoin(conn, data.Name)
-			}
-		case "leave":
-			d.handleLeave(conn)
-		default:
-			log.Println("Unknown message type: ", m.Type)
+		if handler, ok := d.handlers[m.Type]; ok {
+			handler(conn, m.Data)
+		} else {
+			log.Println("Unknown message type:", m.Type)
 		}
 	}
 }
 
-func (d* Dispatcher) handleJoin(conn* websocket.Conn, name string) {
+func (d *Dispatcher) handleJoin(conn *websocket.Conn, raw json.RawMessage) {
+	var data struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil {
+		log.Println("Invalid join data:", err)
+		return
+	}
+
 	d.Lock()
 	defer d.Unlock()
-
 	if session, ok := d.players[conn]; ok {
-		session.Name = name
-		log.Printf("Player joined: %s\n", name)
+		session.Name = data.Name
+		log.Printf("Player joined: %s\n", data.Name)
 	}
 }
 
-func (d* Dispatcher) handleLeave(conn* websocket.Conn) {
+func (d *Dispatcher) handleLeave(conn *websocket.Conn, _ json.RawMessage) {
 	d.Lock()
 	defer d.Unlock()
-
 	if session, ok := d.players[conn]; ok {
 		log.Printf("Player left: %s\n", session.Name)
 		delete(d.players, conn)
 	}
 }
-
