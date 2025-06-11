@@ -20,6 +20,7 @@ jobs:
           go-version: '1.21'
 
       - name: Build Go binary
+        working-directory: server
         run: go build -o server_bin ./main.go
 
       - name: Set up Python
