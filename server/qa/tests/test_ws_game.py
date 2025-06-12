@@ -96,7 +96,6 @@ async def test_game_start_message(go_server):
         types = {m["type"] for m in start_msgs}
         assert types == {"game_start"}, f"Expected game_start messages, got: {types}"
 
-        # Dodatkowe sanity-checki
         for m in start_msgs:
             assert "your_role" in m["data"]
             assert m["data"]["your_role"] in ("X", "O")
