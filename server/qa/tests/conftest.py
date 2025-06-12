@@ -6,10 +6,9 @@ import socket
 import time
 import threading
 import atexit
-import signal
+from random import randrange
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-
 from utils import (
     find_file_upward,
     LogCapture,
@@ -46,14 +45,19 @@ def go_server(log_capture):
     main_path = find_file_upward("main.go")
     subprocess.run(["go", "build", "-o", "server_bin", main_path], check=True)
 
+    while True:
+        port = randrange(8080, 12400)
+        if not is_port_open("localhost", port):
+            break
+
     proc = subprocess.Popen(
-        ["./server_bin"],
+        ["./server_bin", "--port", f"{port}"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT
     )
-    server_state = ServerState(proc.pid)
+    server_state = ServerState(port, proc.pid)
     assert server_state.pid is not None, "Server didn't start"
-    print(f"🟢 Starting Go server: {main_path} with PID: {server_state.pid}")
+    print(f"🟢 Starting Go server: localhost:{port} with PID: {server_state.pid}")
 
     def _read_stdout(pipe):
         for line in iter(pipe.readline, b""):
@@ -64,12 +68,13 @@ def go_server(log_capture):
 
     timeout = 5
     start = time.time()
-    while not is_port_open("localhost", 8080):
+    while not is_port_open("localhost", port):
         if time.time() - start > timeout:
             cleanup_server()
             raise RuntimeError("Go server failed to start")
         time.sleep(0.2)
 
+    yield server_state
     assert server_state.is_running
     os.remove("server_bin")
 

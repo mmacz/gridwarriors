@@ -46,7 +46,8 @@ class LogCapture:
         return False
 
 class ServerState:
-    def __init__(self, pid = None):
+    def __init__(self, port: int, pid = None):
+        self._port = port
         self.pid = pid
 
     @property
@@ -58,6 +59,10 @@ class ServerState:
             return True
         except OSError:
             return False
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     def kill(self):
         if self.pid is None:
