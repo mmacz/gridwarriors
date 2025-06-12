@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"log"
+	"math/rand"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,6 +14,7 @@ type Dispatcher struct {
 	sync.Mutex
 	players  map[*websocket.Conn]*PlayerSession
 	handlers map[string]func(*websocket.Conn, json.RawMessage)
+	games    []*GameState
 }
 
 type PlayerSession struct {
@@ -19,14 +22,24 @@ type PlayerSession struct {
 	Name string
 }
 
+type GameState struct {
+	PlayerX    *PlayerSession
+	PlayerO    *PlayerSession
+	Board      [3][3]string
+	Turn       string
+	IsFinished bool
+}
+
 func NewDispatcher() *Dispatcher {
 	d := &Dispatcher{
 		players:  make(map[*websocket.Conn]*PlayerSession),
+		games:    []*GameState{},
 		handlers: make(map[string]func(*websocket.Conn, json.RawMessage)),
 	}
 
 	d.handlers["join"] = d.handleJoin
 	d.handlers["leave"] = d.handleLeave
+	d.handlers["start"] = d.handleStart
 
 	return d
 }
@@ -86,4 +99,39 @@ func (d *Dispatcher) handleLeave(conn *websocket.Conn, _ json.RawMessage) {
 		log.Printf("Player left: %s\n", session.Name)
 		delete(d.players, conn)
 	}
+}
+
+func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
+	d.Lock()
+	defer d.Unlock()
+
+	var p1, p2 *PlayerSession
+	for _, p := range d.players {
+		if p1 == nil {
+			p1 = p
+		} else if p2 == nil {
+			p2 = p
+			break
+		}
+	}
+
+	if p1 == nil || p2 == nil {
+		log.Println("Not enough players for game start")
+		return
+	}
+
+	turn := "X"
+	rand.New(rand.NewSource(time.Now().UnixNano()))
+	if rand.Intn(2) == 0 {
+		turn = "O"
+	}
+
+	game := &GameState{
+		PlayerX:    p1,
+		PlayerO:    p2,
+		Turn:       turn,
+		IsFinished: false,
+	}
+	d.games = append(d.games, game)
+	log.Printf("Game started between %s (X) and %s (O) | Turn: %s\n", p1.Name, p2.Name, turn)
 }

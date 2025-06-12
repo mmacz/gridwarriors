@@ -40,3 +40,31 @@ async def test_multiple_users_connect_and_disconnect(go_server, log_capture):
 
     for name, _ in conns:
         assert log_capture.contains(f"Player left: {name}")
+
+@pytest.mark.asyncio
+async def test_start_game(go_server, log_capture):
+    port = go_server.port
+    ws_url = f"ws://localhost:{port}/ws"
+
+    async with websockets.connect(ws_url) as ws1, websockets.connect(ws_url) as ws2:
+        await ws1.send(json.dumps({
+            "type": "join",
+            "data": { "name": "PlayerOne" }
+        }))
+        await ws2.send(json.dumps({
+            "type": "join",
+            "data": { "name": "PlayerTwo" }
+        }))
+
+        await asyncio.sleep(0.2)
+
+        await ws1.send(json.dumps({
+            "type": "start",
+            "data": {}
+        }))
+
+        await asyncio.sleep(0.2)
+
+        assert log_capture.contains("Game started between PlayerOne (X) and PlayerTwo (O)") or \
+               log_capture.contains("Game started between PlayerOne (O) and PlayerTwo (X)"), \
+               "Start game log not found"
