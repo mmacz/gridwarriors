@@ -20,6 +20,7 @@ type Dispatcher struct {
 type PlayerSession struct {
 	Conn *websocket.Conn
 	Name string
+	Game *GameState
 }
 
 type GameState struct {
@@ -157,6 +158,8 @@ func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
 		Turn:       turn,
 		IsFinished: false,
 	}
+	p1.Game = game
+	p2.Game = game
 	d.games = append(d.games, game)
 	log.Printf("Game started between %s (X) and %s (O) | Turn: %s\n", p1.Name, p2.Name, turn)
 	d.sendGameStart(p1, "X", p2.Name, turn)
