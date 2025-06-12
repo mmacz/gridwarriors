@@ -68,3 +68,37 @@ async def test_start_game(go_server, log_capture):
         assert log_capture.contains("Game started between PlayerOne (X) and PlayerTwo (O)") or \
                log_capture.contains("Game started between PlayerOne (O) and PlayerTwo (X)"), \
                "Start game log not found"
+
+@pytest.mark.asyncio
+async def test_game_start_message(go_server):
+    uri = f"ws://localhost:{go_server.port}/ws"
+
+    async with websockets.connect(uri) as ws1, websockets.connect(uri) as ws2:
+        await ws1.send(json.dumps({
+            "type": "join",
+            "data": { "name": "Alice" }
+        }))
+        await ws2.send(json.dumps({
+            "type": "join",
+            "data": { "name": "Bob" }
+        }))
+
+        await asyncio.sleep(0.2)
+
+        await ws1.send(json.dumps({ "type": "start" }))
+
+        start_msgs = []
+        for ws in (ws1, ws2):
+            raw = await ws.recv()
+            msg = json.loads(raw)
+            start_msgs.append(msg)
+
+        types = {m["type"] for m in start_msgs}
+        assert types == {"game_start"}, f"Expected game_start messages, got: {types}"
+
+        # Dodatkowe sanity-checki
+        for m in start_msgs:
+            assert "your_role" in m["data"]
+            assert m["data"]["your_role"] in ("X", "O")
+            assert m["data"]["opponent"] in ("Alice", "Bob")
+            assert m["data"]["turn"] in ("X", "O")

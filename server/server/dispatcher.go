@@ -30,6 +30,17 @@ type GameState struct {
 	IsFinished bool
 }
 
+type GameStartMessage struct {
+	Type string        `json:"type"`
+	Data GameStartData `json:"data"`
+}
+
+type GameStartData struct {
+	YourRole string `json:"your_role"`
+	Opponent string `json:"opponent"`
+	Turn     string `json:"turn"`
+}
+
 func NewDispatcher() *Dispatcher {
 	d := &Dispatcher{
 		players:  make(map[*websocket.Conn]*PlayerSession),
@@ -101,6 +112,20 @@ func (d *Dispatcher) handleLeave(conn *websocket.Conn, _ json.RawMessage) {
 	}
 }
 
+func (d *Dispatcher) sendGameStart(p *PlayerSession, role, opponent, turn string) {
+	msg := GameStartMessage{
+		Type: "game_start",
+		Data: GameStartData{
+			YourRole: role,
+			Opponent: opponent,
+			Turn:     turn,
+		},
+	}
+	if err := p.Conn.WriteJSON(msg); err != nil {
+		log.Printf("Failed to send game_start to %s: %v\n", p.Name, err)
+	}
+}
+
 func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
 	d.Lock()
 	defer d.Unlock()
@@ -134,4 +159,6 @@ func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
 	}
 	d.games = append(d.games, game)
 	log.Printf("Game started between %s (X) and %s (O) | Turn: %s\n", p1.Name, p2.Name, turn)
+	d.sendGameStart(p1, "X", p2.Name, turn)
+	d.sendGameStart(p2, "O", p1.Name, turn)
 }
