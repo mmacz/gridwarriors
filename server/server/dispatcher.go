@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"math/rand"
 	"sync"
@@ -24,6 +25,7 @@ type PlayerSession struct {
 }
 
 type GameState struct {
+	ID         string
 	PlayerX    *PlayerSession
 	PlayerO    *PlayerSession
 	Board      [3][3]string
@@ -36,10 +38,21 @@ type GameStartMessage struct {
 	Data GameStartData `json:"data"`
 }
 
+type GameMoveMessage struct {
+	Type string       `json:"type"`
+	Data GameMoveData `json:"data"`
+}
+
 type GameStartData struct {
+	GameID   string `json:"game_id"`
 	YourRole string `json:"your_role"`
 	Opponent string `json:"opponent"`
 	Turn     string `json:"turn"`
+}
+
+type GameMoveData struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 func NewDispatcher() *Dispatcher {
@@ -52,6 +65,7 @@ func NewDispatcher() *Dispatcher {
 	d.handlers["join"] = d.handleJoin
 	d.handlers["leave"] = d.handleLeave
 	d.handlers["start"] = d.handleStart
+	d.handlers["move"] = d.handleMove
 
 	return d
 }
@@ -110,20 +124,22 @@ func (d *Dispatcher) handleLeave(conn *websocket.Conn, _ json.RawMessage) {
 	if session, ok := d.players[conn]; ok {
 		log.Printf("Player left: %s\n", session.Name)
 		delete(d.players, conn)
+		conn.Close()
 	}
 }
 
-func (d *Dispatcher) sendGameStart(p *PlayerSession, role, opponent, turn string) {
+func (d *Dispatcher) sendGameStart(p *PlayerSession, game *GameState, role, opponent, turn string) {
 	msg := GameStartMessage{
 		Type: "game_start",
 		Data: GameStartData{
+			GameID:   game.ID,
 			YourRole: role,
 			Opponent: opponent,
 			Turn:     turn,
 		},
 	}
 	if err := p.Conn.WriteJSON(msg); err != nil {
-		log.Printf("Failed to send game_start to %s: %v\n", p.Name, err)
+		log.Printf("[Game %s] Failed to send game_start to %s: %v\n", game.ID, p.Name, err)
 	}
 }
 
@@ -146,13 +162,14 @@ func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
 		return
 	}
 
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	turn := "X"
-	rand.New(rand.NewSource(time.Now().UnixNano()))
-	if rand.Intn(2) == 0 {
+	if r.Intn(2) == 0 {
 		turn = "O"
 	}
 
 	game := &GameState{
+		ID:         fmt.Sprintf("%d", time.Now().UnixNano()),
 		PlayerX:    p1,
 		PlayerO:    p2,
 		Turn:       turn,
@@ -161,7 +178,186 @@ func (d *Dispatcher) handleStart(conn *websocket.Conn, _ json.RawMessage) {
 	p1.Game = game
 	p2.Game = game
 	d.games = append(d.games, game)
-	log.Printf("Game started between %s (X) and %s (O) | Turn: %s\n", p1.Name, p2.Name, turn)
-	d.sendGameStart(p1, "X", p2.Name, turn)
-	d.sendGameStart(p2, "O", p1.Name, turn)
+
+	log.Printf("[Game %s] Started between %s (X) and %s (O) | Turn: %s\n", game.ID, p1.Name, p2.Name, turn)
+	d.sendGameStart(p1, game, "X", p2.Name, turn)
+	d.sendGameStart(p2, game, "O", p1.Name, turn)
+}
+
+func (g *GameState) GetRole(p *PlayerSession) (string, bool) {
+	switch p {
+	case g.PlayerX:
+		return "X", true
+	case g.PlayerO:
+		return "O", true
+	default:
+		return "", false
+	}
+}
+
+func (d *Dispatcher) sendError(p *PlayerSession, message string) {
+	errMsg := map[string]interface{}{
+		"type": "error",
+		"data": map[string]string{
+			"message": message,
+		},
+	}
+	if err := p.Conn.WriteJSON(errMsg); err != nil {
+		log.Printf("Failed to send error to %s: %v\n", p.Name, err)
+	}
+}
+
+func (d *Dispatcher) sendUpdate(g *GameState) {
+	msg := map[string]interface{}{
+		"type": "game_update",
+		"data": map[string]interface{}{
+			"board": g.Board,
+			"turn":  g.Turn,
+		},
+	}
+	if err := g.PlayerX.Conn.WriteJSON(msg); err != nil {
+		log.Printf("[Game %s] Failed to send update to %s: %v\n", g.ID, g.PlayerX.Name, err)
+	}
+	if err := g.PlayerO.Conn.WriteJSON(msg); err != nil {
+		log.Printf("[Game %s] Failed to send update to %s: %v\n", g.ID, g.PlayerO.Name, err)
+	}
+}
+
+func CheckWinner(board [3][3]string) (string, bool) {
+	lines := [8][3][2]int{
+		{{0, 0}, {0, 1}, {0, 2}},
+		{{1, 0}, {1, 1}, {1, 2}},
+		{{2, 0}, {2, 1}, {2, 2}},
+		{{0, 0}, {1, 0}, {2, 0}},
+		{{0, 1}, {1, 1}, {2, 1}},
+		{{0, 2}, {1, 2}, {2, 2}},
+		{{0, 0}, {1, 1}, {2, 2}},
+		{{0, 2}, {1, 1}, {2, 0}},
+	}
+	for _, line := range lines {
+		a, b, c := line[0], line[1], line[2]
+		if board[a[0]][a[1]] != "" &&
+			board[a[0]][a[1]] == board[b[0]][b[1]] &&
+			board[a[0]][a[1]] == board[c[0]][c[1]] {
+			return board[a[0]][a[1]], false
+		}
+	}
+
+	for i := 0; i < 3; i++ {
+		for j := 0; j < 3; j++ {
+			if board[i][j] == "" {
+				return "", false
+			}
+		}
+	}
+	fmt.Println("BOARD FULL — DRAW DETECTED")
+	return "", true
+}
+
+func buildGameEndMessage(winner, role string, draw bool) map[string]interface{} {
+	result := "lose"
+	winnerField := winner
+
+	if draw {
+		result = "draw"
+		winnerField = ""
+	} else if role == winner {
+		result = "win"
+	}
+
+	return map[string]interface{}{
+		"type": "game_end",
+		"data": map[string]string{
+			"winner": winnerField,
+			"result": result,
+		},
+	}
+}
+
+func (d *Dispatcher) sendGameEnd(game *GameState, winner string, draw bool) {
+	for _, player := range []*PlayerSession{game.PlayerX, game.PlayerO} {
+		role, _ := game.GetRole(player)
+		msg := buildGameEndMessage(winner, role, draw)
+
+		if err := player.Conn.WriteJSON(msg); err != nil {
+			log.Printf("[Game %s] Failed to send game_end to %s: %v\n", game.ID, player.Name, err)
+		}
+	}
+}
+
+func formatBoard(b [3][3]string) string {
+	var out string
+	for _, row := range b {
+		for _, cell := range row {
+			if cell == "" {
+				out += "."
+			} else {
+				out += cell
+			}
+		}
+		out += "\n"
+	}
+	return out
+}
+
+func (d *Dispatcher) handleMove(conn *websocket.Conn, raw json.RawMessage) {
+	d.Lock()
+	defer d.Unlock()
+
+	p, ok := d.players[conn]
+	if !ok || p == nil || p.Game == nil || p.Game.IsFinished {
+		log.Printf("Invalid move: no session or game inactive (conn: %v)\n", conn.RemoteAddr())
+		if ok && p != nil {
+			d.sendError(p, "Invalid game state")
+		}
+		return
+	}
+
+	game := p.Game
+
+	var move GameMoveData
+	if err := json.Unmarshal(raw, &move); err != nil {
+		log.Printf("[Game %s] Invalid move data from %s: %v\n", game.ID, p.Name, err)
+		d.sendError(p, "Invalid move data")
+		return
+	}
+
+	role, ok := game.GetRole(p)
+	if !ok {
+		log.Printf("[Game %s] Player %s not part of the game\n", game.ID, p.Name)
+		d.sendError(p, "You are not part of this game")
+		return
+	}
+
+	if game.Turn != role {
+		log.Printf("[Game %s] Not %s's turn (you are %s, current turn: %s)\n", game.ID, p.Name, role, game.Turn)
+		d.sendError(p, "It's not your turn")
+		return
+	}
+
+	if move.X < 0 || move.X >= 3 || move.Y < 0 || move.Y >= 3 {
+		log.Printf("[Game %s] Invalid move from %s: x=%d y=%d\n", game.ID, p.Name, move.X, move.Y)
+		d.sendError(p, "Invalid move coordinates")
+		return
+	}
+
+	if game.Board[move.Y][move.X] != "" {
+		log.Printf("[Game %s] Cell already occupied at (%d,%d) by %s\n", game.ID, move.X, move.Y, game.Board[move.Y][move.X])
+		d.sendError(p, "Cell already occupied")
+		return
+	}
+
+	game.Board[move.Y][move.X] = role
+	log.Printf("[Game %s] %s (%s) played at (%d,%d)\n", game.ID, p.Name, role, move.X, move.Y)
+
+	log.Printf("[Game %s] Current board state:\n%s", game.ID, formatBoard(game.Board))
+	winner, draw := CheckWinner(game.Board)
+	if winner != "" || draw {
+		game.IsFinished = true
+		d.sendGameEnd(game, winner, draw)
+		return
+	}
+
+	game.Turn = map[string]string{"X": "O", "O": "X"}[game.Turn]
+	d.sendUpdate(game)
 }

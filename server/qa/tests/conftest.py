@@ -34,11 +34,11 @@ def cleanup_server():
 
 atexit.register(cleanup_server)
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def log_capture():
     return LogCapture()
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def go_server(log_capture):
     global proc
 

@@ -2,6 +2,7 @@ import asyncio
 import pytest
 import json
 import websockets
+import re
 
 WS_URL = "ws://localhost:8080/ws"
 
@@ -65,9 +66,8 @@ async def test_start_game(go_server, log_capture):
 
         await asyncio.sleep(0.2)
 
-        assert log_capture.contains("Game started between PlayerOne (X) and PlayerTwo (O)") or \
-               log_capture.contains("Game started between PlayerOne (O) and PlayerTwo (X)"), \
-               "Start game log not found"
+        pattern = re.compile(r"\[Game \d+\] Started between PlayerOne \(.\) and PlayerTwo \(.\) \| Turn: .")
+        assert any(pattern.search(line) for line in log_capture.lines), "Start game log not found"
 
 @pytest.mark.asyncio
 async def test_game_start_message(go_server):
